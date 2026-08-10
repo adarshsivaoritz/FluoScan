@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base href="/FluoScan/">
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="FluoScan fluorescent barcode reader">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#111827">
+  <title>FluoScan</title>
+
+  <!-- ZXing is used only after FluoScan reconstructs a clean black/white barcode. -->
+  <script src="https://unpkg.com/@zxing/library@0.19.1" type="application/javascript"></script>
+  <script>
+    window.decodeCode128DataUrl = async function(dataUrl) {
+      if (!window.ZXing) return null;
+      const img = new Image();
+      const loaded = new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+      });
+      img.src = dataUrl;
+      await loaded;
+
+      const reader = new ZXing.BrowserMultiFormatReader();
+      try {
+        const result = await reader.decodeFromImageElement(img);
+        if (!result) return null;
+        const format = result.getBarcodeFormat ? String(result.getBarcodeFormat()) : "";
+        const text = result.getText ? result.getText() : String(result);
+        return JSON.stringify({ text: text, format: format });
+      } catch (e) {
+        return null;
+      } finally {
+        try { reader.reset(); } catch (_) {}
+      }
+    };
+  </script>
+</head>
+<body>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
