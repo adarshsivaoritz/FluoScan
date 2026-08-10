@@ -1,4 +1,4 @@
-// FluoScan v0.1
+// FluoScan v0.2
 // Flutter Web fluorescent Code 128 reader.
 // Web-only by design, matching the pH-meterV2 GitHub Pages workflow.
 
@@ -78,7 +78,7 @@ class _ScanCandidate {
 }
 
 class _ScannerPageState extends State<ScannerPage> {
-  static const String _cameraViewType = 'fluoscan-camera-view-v01';
+  static const String _cameraViewType = 'fluoscan-camera-view-v02';
 
   late final html.VideoElement _video;
   final html.CanvasElement _sourceCanvas = html.CanvasElement();
@@ -94,6 +94,7 @@ class _ScannerPageState extends State<ScannerPage> {
   String _status = 'Ready. Start the camera or test one of the supplied images.';
   String _decoded = '--';
   String _details = '';
+  Uint8List? _capturedRoiPng;
   Uint8List? _processedPng;
 
   @override
@@ -206,7 +207,55 @@ class _ScannerPageState extends State<ScannerPage> {
     _sourceCanvas.width = w;
     _sourceCanvas.height = h;
     _sourceCanvas.context2D.drawImageScaled(_video, 0, 0, w, h);
-    await _analyseCanvas(_sourceCanvas, sourceName: 'live camera', quiet: quiet);
+
+    // The guide is drawn over a video using object-fit: cover. Map that
+    // visible guide back into source-camera pixels so we analyse what the
+    // user actually placed inside the guide, not the entire camera frame.
+    final roi = _cameraGuideRect(w, h);
+    await _analyseCanvas(
+      _sourceCanvas,
+      sourceName: 'live camera',
+      quiet: quiet,
+      roiX: roi.left,
+      roiY: roi.top,
+      roiWidth: roi.width,
+      roiHeight: roi.height,
+    );
+  }
+
+  math.Rectangle<int> _cameraGuideRect(int sourceWidth, int sourceHeight) {
+    final displayWidth = _video.clientWidth > 0
+        ? _video.clientWidth.toDouble()
+        : sourceWidth.toDouble();
+    final displayHeight = _video.clientHeight > 0
+        ? _video.clientHeight.toDouble()
+        : sourceHeight.toDouble();
+
+    final scale = math.max(
+      displayWidth / sourceWidth,
+      displayHeight / sourceHeight,
+    );
+    final renderedWidth = sourceWidth * scale;
+    final renderedHeight = sourceHeight * scale;
+    final offsetX = (displayWidth - renderedWidth) / 2.0;
+    final offsetY = (displayHeight - renderedHeight) / 2.0;
+
+    // Must match the FractionallySizedBox in _cameraPanel.
+    final guideLeft = displayWidth * 0.05;
+    final guideTop = displayHeight * (0.50 - 0.42 / 2.0);
+    final guideWidth = displayWidth * 0.90;
+    final guideHeight = displayHeight * 0.42;
+
+    var x = ((guideLeft - offsetX) / scale).round();
+    var y = ((guideTop - offsetY) / scale).round();
+    var w = (guideWidth / scale).round();
+    var h = (guideHeight / scale).round();
+
+    x = x.clamp(0, sourceWidth - 1).toInt();
+    y = y.clamp(0, sourceHeight - 1).toInt();
+    w = w.clamp(1, sourceWidth - x).toInt();
+    h = h.clamp(1, sourceHeight - y).toInt();
+    return math.Rectangle<int>(x, y, w, h);
   }
 
   Future<void> _chooseImage() async {
@@ -260,42 +309,85 @@ class _ScannerPageState extends State<ScannerPage> {
     html.CanvasElement canvas, {
     required String sourceName,
     bool quiet = false,
+    int roiX = 0,
+    int roiY = 0,
+    int? roiWidth,
+    int? roiHeight,
   }) async {
     if (_busy) return;
     _busy = true;
-    if (!quiet && mounted) {
+    if (mounted) {
       setState(() {
-        _status = 'Processing $sourceName…';
-        _decoded = '--';
-        _details = '';
+        if (!quiet) {
+          _status = 'Scanning $sourceName…';
+          _decoded = '--';
+          _details = '';
+        }
       });
     }
 
     try {
-      final width = canvas.width ?? 0;
-      final height = canvas.height ?? 0;
-      if (width < 100 || height < 40) {
+      final fullWidth = canvas.width ?? 0;
+      final fullHeight = canvas.height ?? 0;
+      if (fullWidth < 100 || fullHeight < 40) {
         throw 'Image is too small for reliable barcode analysis.';
       }
 
-      final pixels = canvas.context2D.getImageData(0, 0, width, height).data;
+      final x = roiX.clamp(0, fullWidth - 1).toInt();
+      final y = roiY.clamp(0, fullHeight - 1).toInt();
+      final width = (roiWidth ?? (fullWidth - x)).clamp(1, fullWidth - x).toInt();
+      final height = (roiHeight ?? (fullHeight - y)).clamp(1, fullHeight - y).toInt();
+      if (width < 100 || height < 30) {
+        throw 'Barcode guide region is too small.';
+      }
+
+      final roiData = canvas.context2D.getImageData(x, y, width, height);
+      final roiCanvas = html.CanvasElement(width: width, height: height);
+      roiCanvas.context2D.putImageData(roiData, 0, 0);
+      final roiDataUrl = roiCanvas.toDataUrl('image/png');
+      final roiRaw = roiDataUrl.split(',').last;
+      if (mounted) {
+        setState(() => _capturedRoiPng = base64Decode(roiRaw));
+      }
+
+      // First try the actual guide image directly. This makes FluoScan a
+      // useful sanity check with an ordinary black/white barcode and also
+      // catches fluorescent prints that already have enough optical contrast.
+      final direct = await _decodeWithZxing(roiDataUrl);
+      if (direct != null && direct.$1.trim().isNotEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _decoded = direct.$1;
+          _details = 'Direct guide decode • ${direct.$2}';
+          _processedPng = null;
+          _status = 'Decoded successfully from $sourceName.';
+        });
+        return;
+      }
+
+      final pixels = roiData.data;
       final modes = _mode == InkMode.auto
           ? <InkMode>[InkMode.diabp, InkMode.dianbp, InkMode.diasf]
           : <InkMode>[_mode];
 
-      // Several thin bands are tested independently. This avoids blurring
-      // the bar widths when printed edges are wavy or slightly non-parallel.
-      const bands = <double>[0.34, 0.42, 0.50, 0.58, 0.66];
+      // Multiple scan lines are tried independently inside the guide. This
+      // tolerates rough/wavy printed edges better than averaging the full bar
+      // height and also gives ZXing several independent reconstructions.
+      const bands = <double>[0.24, 0.34, 0.44, 0.50, 0.56, 0.66, 0.76];
       final userShift = _sensitivity;
       final thresholdOffsets = <double>[
         userShift,
-        userShift - 0.06,
-        userShift + 0.06,
-        userShift - 0.12,
-        userShift + 0.12,
+        userShift - 0.04,
+        userShift + 0.04,
+        userShift - 0.08,
+        userShift + 0.08,
+        userShift - 0.14,
+        userShift + 0.14,
       ];
 
       _ScanCandidate? winner;
+      String? diagnosticDataUrl;
+      String diagnosticLabel = '';
 
       for (final mode in modes) {
         for (final band in bands) {
@@ -314,24 +406,51 @@ class _ScannerPageState extends State<ScannerPage> {
 
           for (final offset in thresholdOffsets) {
             final threshold = baseThreshold + offset * spread;
-            var bits = profile.map((v) => v > threshold).toList(growable: false);
-            bits = _repairShortRuns(bits);
+            final brightBits = profile.map((v) => v > threshold).toList(growable: false);
 
-            final reconstructed = _reconstructBarcode(bits);
-            if (reconstructed == null) continue;
+            // Bright-bars is the expected fluorescent case. Dark-bars is
+            // deliberately tested too, so conventional barcodes and unusual
+            // emission/background combinations are not rejected by polarity.
+            for (var polarity = 0; polarity < 2; polarity++) {
+              var bits = polarity == 0
+                  ? List<bool>.from(brightBits)
+                  : brightBits.map((v) => !v).toList(growable: false);
+              bits = _repairShortRuns(bits);
 
-            final result = await _decodeWithZxing(reconstructed);
-            if (result != null && result.$1.trim().isNotEmpty) {
-              winner = _ScanCandidate(
-                text: result.$1,
-                format: result.$2,
-                preset: mode.label,
-                band: band,
-                thresholdOffset: offset,
-                dataUrl: reconstructed,
-              );
-              break;
+              // Some webcams/front cameras are mirrored. Test both directions
+              // instead of relying on how a browser/driver presents the image.
+              for (var mirrored = 0; mirrored < 2; mirrored++) {
+                final candidateBits = mirrored == 0
+                    ? bits
+                    : bits.reversed.toList(growable: false);
+                final reconstructed = _reconstructBarcode(candidateBits);
+                if (reconstructed == null) continue;
+
+                if (diagnosticDataUrl == null) {
+                  diagnosticDataUrl = reconstructed;
+                  diagnosticLabel =
+                      '${mode.label} • band ${(band * 100).round()}% • '
+                      '${polarity == 0 ? 'bright bars' : 'dark bars'} • '
+                      '${mirrored == 0 ? 'normal' : 'mirrored'}';
+                }
+
+                final result = await _decodeWithZxing(reconstructed);
+                if (result != null && result.$1.trim().isNotEmpty) {
+                  winner = _ScanCandidate(
+                    text: result.$1,
+                    format: result.$2,
+                    preset:
+                        '${mode.label}/${polarity == 0 ? 'bright' : 'dark'}${mirrored == 1 ? '/mirror' : ''}',
+                    band: band,
+                    thresholdOffset: offset,
+                    dataUrl: reconstructed,
+                  );
+                  break;
+                }
+              }
+              if (winner != null) break;
             }
+            if (winner != null) break;
           }
           if (winner != null) break;
         }
@@ -344,17 +463,23 @@ class _ScannerPageState extends State<ScannerPage> {
         setState(() {
           _decoded = winner!.text;
           _details =
-              'Preset ${winner!.preset} • band ${(winner!.band * 100).round()}% • threshold ${winner!.thresholdOffset.toStringAsFixed(2)}';
+              '${winner!.format} • ${winner!.preset} • band ${(winner!.band * 100).round()}% • threshold ${winner!.thresholdOffset.toStringAsFixed(2)}';
           _processedPng = base64Decode(raw);
           _status = 'Decoded successfully from $sourceName.';
         });
       } else if (!quiet) {
+        Uint8List? diagnostic;
+        if (diagnosticDataUrl != null) {
+          diagnostic = base64Decode(diagnosticDataUrl.split(',').last);
+        }
         setState(() {
           _decoded = '--';
-          _details = '';
-          _processedPng = null;
+          _details = diagnosticLabel.isEmpty
+              ? 'No reconstruction was produced.'
+              : 'Last diagnostic: $diagnosticLabel';
+          _processedPng = diagnostic;
           _status =
-              'No valid barcode decoded. Try another preset, adjust sensitivity, improve UV contrast, or take a straighter photograph.';
+              'Scan completed, but no valid barcode was decoded. Check the captured guide region and reconstructed barcode below.';
         });
       }
     } catch (e) {
@@ -363,6 +488,7 @@ class _ScannerPageState extends State<ScannerPage> {
       }
     } finally {
       _busy = false;
+      if (mounted) setState(() {});
     }
   }
 
@@ -582,7 +708,7 @@ class _ScannerPageState extends State<ScannerPage> {
                   ),
                   const SizedBox(height: 6),
                   const Text(
-                    'The camera sees the visible fluorescence. FluoScan isolates the luminogen emission, reconstructs a conventional black/white barcode, and then attempts Code 128 decoding.',
+                    'The camera first tries the barcode inside the guide directly. If that fails, FluoScan isolates the luminogen emission, reconstructs a black/white barcode, and retries decoding.',
                   ),
                   const SizedBox(height: 16),
                   _modeSelector(),
@@ -590,19 +716,14 @@ class _ScannerPageState extends State<ScannerPage> {
                   _cameraPanel(compact),
                   const SizedBox(height: 14),
                   _controls(compact),
+                  const SizedBox(height: 10),
+                  _scanStatusCard(),
                   const SizedBox(height: 12),
                   _sensitivityControl(),
                   const SizedBox(height: 14),
                   _resultCard(),
                   const SizedBox(height: 14),
                   _sampleCard(),
-                  const SizedBox(height: 14),
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Text(_status),
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -721,6 +842,36 @@ class _ScannerPageState extends State<ScannerPage> {
     );
   }
 
+  Widget _scanStatusCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                if (_busy) ...[
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 10),
+                ],
+                Expanded(child: Text(_status)),
+              ],
+            ),
+            if (_busy) ...[
+              const SizedBox(height: 10),
+              const LinearProgressIndicator(),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _sensitivityControl() {
     return Card(
       child: Padding(
@@ -762,6 +913,16 @@ class _ScannerPageState extends State<ScannerPage> {
             if (_details.isNotEmpty) ...[
               const SizedBox(height: 5),
               Text(_details, style: const TextStyle(color: Colors.black54)),
+            ],
+            if (_capturedRoiPng != null) ...[
+              const SizedBox(height: 14),
+              const Text('Captured guide region'),
+              const SizedBox(height: 6),
+              Container(
+                color: Colors.black,
+                padding: const EdgeInsets.all(6),
+                child: Image.memory(_capturedRoiPng!, fit: BoxFit.contain),
+              ),
             ],
             if (_processedPng != null) ...[
               const SizedBox(height: 14),

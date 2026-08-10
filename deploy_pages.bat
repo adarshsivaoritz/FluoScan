@@ -1,7 +1,9 @@
 @echo off
-REM Change FluoScan below if your GitHub repository has a different name.
-flutter pub get
-flutter build web --release --base-href /FluoScan/
+REM FluoScan GitHub Pages release build.
+call flutter pub get
+if errorlevel 1 exit /b %errorlevel%
+call flutter build web --release --base-href /FluoScan/
+if errorlevel 1 exit /b %errorlevel%
 echo.
 echo Build complete in build\web
 pause

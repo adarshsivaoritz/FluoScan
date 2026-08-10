@@ -1,0 +1,19 @@
+FluoScan v0.2 patch
+===================
+Copy these files over the matching files in your existing FluoScan project:
+  lib/main.dart
+  web/index.html
+  deploy_pages.bat
+  pubspec.yaml
+
+Then from the project root run:
+  flutter pub get
+  flutter run -d chrome
+
+After testing, commit/push main and rebuild for GitHub Pages:
+  git add .
+  git commit -m "FluoScan v0.2 scanning fixes"
+  git push
+  .\deploy_pages.bat
+
+Then deploy build\web to gh-pages using the same workflow as v0.1.
