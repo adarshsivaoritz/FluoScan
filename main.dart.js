@@ -38664,7 +38664,7 @@ case 6:case 1:return A.R(q,r)
 case 2:return A.Q(o.at(-1),r)}})
 return A.S($async$pq,r)},
 P(a){var s,r,q,p,o,n,m,l,k=this,j=null,i=A.bP(a,j,t.w).w.a.a<760,h=A.a1(a).ok.f
-h=A.oj("Screen barcode reader",j,h==null?j:h.abd(B.c3))
+h=A.oj("Fluorescent barcode reader",j,h==null?j:h.abd(B.c3))
 s=i?1.3333333333333333:1.7777777777777777
 r=A.pg(18)
 q=t.E
@@ -38686,17 +38686,17 @@ m=A.c([B.QK,B.xn,new A.yb(k.Q,B.Nk,j)],q)
 l=k.as
 if(l.length!==0)B.b.N(m,A.c([B.Ly,A.oj(l,j,B.Os)],q))
 l=k.at
-if(l!=null)B.b.N(m,A.c([B.e8,B.QS,B.jJ,A.uW(A.api(l,B.kx),B.C,B.l,j,j,j,B.lJ,j)],q))
+if(l!=null)B.b.N(m,A.c([B.e8,B.QQ,B.jJ,A.uW(A.api(l,B.kx),B.C,B.l,j,j,j,B.lJ,j)],q))
 l=k.ax
-if(l!=null)B.b.N(m,A.c([B.e8,B.QN,B.jJ,A.uW(A.api(l,B.kx),B.C,B.k,j,j,j,B.lK,j)],q))
-return new A.xW(new A.uc(B.QO,new A.Pm(j,j,1/0,56),j),A.aqF(!0,new A.Js(B.lH,A.pm(new A.eQ(B.yJ,A.EU(A.c([h,B.jJ,B.QR,B.e8,new A.E0(s,r,j),B.e8,p,B.xm,n,B.e8,A.ao8(new A.dp(B.lH,A.EU(m,B.bI,B.b3,B.cG),j)),B.Lx,B.zY],q),B.dp,B.b3,B.cG),j),j,j),j),!0),j)},
+if(l!=null)B.b.N(m,A.c([B.e8,B.QM,B.jJ,A.uW(A.api(l,B.kx),B.C,B.k,j,j,j,B.lK,j)],q))
+return new A.xW(new A.uc(B.QN,new A.Pm(j,j,1/0,56),j),A.aqF(!0,new A.Js(B.lH,A.pm(new A.eQ(B.yJ,A.EU(A.c([h,B.jJ,B.QR,B.e8,new A.E0(s,r,j),B.e8,p,B.xm,n,B.e8,A.ao8(new A.dp(B.lH,A.EU(m,B.bI,B.b3,B.cG),j)),B.Lx,B.zY],q),B.dp,B.b3,B.cG),j),j,j),j),!0),j)},
 Zl(a){var s,r,q,p=this,o=null,n=p.w,m=n?p.ga8e():p.ga87(),l=A.al4(n?B.CI:B.CJ,o)
 m=A.ayN(l,A.oj(n?"Stop camera":"Start camera",o,o),m)
-l=A.ayO(B.CN,B.QP,n&&!p.y?new A.ags(p):o)
+l=A.ayO(B.CN,B.QO,n&&!p.y?new A.ags(p):o)
 s=p.x
 n=n?new A.agt(p):o
 r=t.E
-q=A.c([m,l,A.a67(A.c([new A.JS(s,n,o),B.QQ],r),B.b_,B.cF,0)],r)
+q=A.c([m,l,A.a67(A.c([new A.JS(s,n,o),B.QP],r),B.b_,B.cF,0)],r)
 if(a)return new A.KI(8,8,q,o)
 n=t.ps
 n=A.a3(new A.e0(q,new A.agu(),n),n.i("p.E"))
@@ -78739,8 +78739,8 @@ B.cu=new A.my(3,"experimentalWebParagraph")
 B.zX=new A.pl(null,null,null,null,null,null,null)
 B.lG=new A.bf(14,14,14,14)
 B.N8=new A.l(!0,null,null,null,null,null,12.5,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)
-B.QM=new A.eG("For the cleanest screen test: keep the barcode horizontal, remove the mouse cursor from the barcode, fill roughly 70\u201390% of the guide width, and hold the phone as square to the monitor as practical.",null,B.N8,null,null,null)
-B.Ig=new A.dp(B.lG,B.QM,null)
+B.QT=new A.eG("Keep one barcode horizontal inside the guide and hold the phone as square to the barcode as possible.",null,B.N8,null,null,null)
+B.Ig=new A.dp(B.lG,B.QT,null)
 B.U3=new A.abD(0,"elevated")
 B.zY=new A.uv(B.Ig,null)
 B.zZ=new A.uw(null,null,null,null,null)
@@ -80393,8 +80393,8 @@ B.J0=new A.qE(3,"scale")
 B.J1=new A.qE(4,"unknown")
 B.J2=new A.xi(null,null,null,null,null,null,null,null,null,null,null,null,null)
 B.OI=new A.l(!0,B.k,null,null,null,null,null,B.m9,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)
-B.QT=new A.eG("One horizontal barcode \u2022 include blank space at both ends",null,B.OI,null,null,null)
-B.J3=new A.qF(18,null,null,12,null,null,B.QT,null)
+B.QS=new A.eG("One horizontal barcode \u2022 include blank space at both ends",null,B.OI,null,null,null)
+B.J3=new A.qF(18,null,null,12,null,null,B.QS,null)
 B.J4=new A.qJ(null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)
 B.J5=new A.xm(null,null,null,null,null,null,null)
 B.wp=new A.aB(1,1)
@@ -81012,12 +81012,12 @@ B.PS=new A.l(!0,B.l,null,".AppleSystemUIFont",null,null,null,null,null,null,null
 B.MR=new A.l(!0,B.l,null,".AppleSystemUIFont",null,null,null,null,null,null,null,null,null,null,null,null,null,B.e,null,null,null,"blackRedwoodCity labelSmall",null,null,null,null)
 B.QJ=new A.dr(B.Oy,B.NB,B.Oz,B.P8,B.Nd,B.Nl,B.NV,B.OW,B.O8,B.PE,B.MH,B.N1,B.PA,B.PS,B.MR)
 B.QK=new A.eG("Decoded result",null,B.h_,null,null,null)
-B.QN=new A.eG("Best reconstructed barcode",null,null,null,null,null)
-B.QO=new A.eG("FluoScan",null,null,null,null,null)
-B.QP=new A.eG("Scan frame",null,null,null,null,null)
-B.QQ=new A.eG("Auto scan",null,null,null,null,null)
-B.QR=new A.eG("Optimised for fluorescent barcode photographs displayed on a laptop/monitor and scanned with the phone rear camera. No image upload is used.",null,null,null,null,null)
-B.QS=new A.eG("Captured guide region",null,null,null,null,null)
+B.QM=new A.eG("Best reconstructed barcode",null,null,null,null,null)
+B.QN=new A.eG("FluoScan",null,null,null,null,null)
+B.QO=new A.eG("Scan frame",null,null,null,null,null)
+B.QP=new A.eG("Auto scan",null,null,null,null,null)
+B.QQ=new A.eG("Captured guide region",null,null,null,null,null)
+B.QR=new A.eG("The camera sees the visible fluorescence. FluoScan isolates the luminogen emission, reconstructs a conventional black/white barcode, and then attempts Code 128 decoding.",null,null,null,null,null)
 B.U1=new A.a9C(0,"system")
 B.HU=new A.i(0.056,0.024)
 B.I5=new A.i(0.108,0.3085)
