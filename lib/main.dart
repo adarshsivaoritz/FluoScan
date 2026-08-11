@@ -770,12 +770,12 @@ class _ScannerPageState extends State<ScannerPage> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'Screen barcode reader',
+                    'Fluorescent barcode reader',
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 6),
                   const Text(
-                    'Optimised for fluorescent barcode photographs displayed on a laptop/monitor and scanned with the phone rear camera. No image upload is used.',
+                    'The camera sees the visible fluorescence. FluoScan isolates the luminogen emission, reconstructs a conventional black/white barcode, and then attempts Code 128 decoding.',
                   ),
                   const SizedBox(height: 14),
                   _cameraPanel(compact),
@@ -790,7 +790,7 @@ class _ScannerPageState extends State<ScannerPage> {
                     child: Padding(
                       padding: EdgeInsets.all(14),
                       child: Text(
-                        'For the cleanest screen test: keep the barcode horizontal, remove the mouse cursor from the barcode, fill roughly 70–90% of the guide width, and hold the phone as square to the monitor as practical.',
+                        'Keep one barcode horizontal inside the guide and hold the phone as square to the barcode as possible.',
                         style: TextStyle(fontSize: 12.5),
                       ),
                     ),
