@@ -1,0 +1,14 @@
+FluoScan v0.4 patch
+
+Replace these files in your existing FluoScan Flutter project:
+- lib/main.dart
+- web/index.html
+- pubspec.yaml
+- deploy_pages.bat
+
+Then run from the project root:
+  flutter pub get
+  flutter run -d chrome
+
+For GitHub Pages:
+  flutter build web --release --base-href /FluoScan/

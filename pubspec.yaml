@@ -1,7 +1,7 @@
 name: fluoscan
 publish_to: "none"
-description: Flutter Web reader for fluorescent screen-printed Code 128 barcodes.
-version: 0.2.0+2
+description: Camera-only Flutter Web reader for fluorescent Code 128 barcode photographs displayed on a screen.
+version: 0.4.0+4
 
 environment:
   sdk: ">=3.0.0 <4.0.0"

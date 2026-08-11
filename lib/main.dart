@@ -1,6 +1,6 @@
-// FluoScan v0.2
-// Flutter Web fluorescent Code 128 reader.
-// Web-only by design, matching the pH-meterV2 GitHub Pages workflow.
+// FluoScan v0.4
+// Camera-only Flutter Web Code 128 reader tuned for fluorescent barcode
+// photographs displayed on a monitor and scanned with a phone rear camera.
 
 import 'dart:async';
 import 'dart:convert';
@@ -13,26 +13,7 @@ import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/material.dart';
 
-void main() {
-  runApp(const FluoScanApp());
-}
-
-enum InkMode { auto, diabp, dianbp, diasf }
-
-extension InkModeLabel on InkMode {
-  String get label {
-    switch (this) {
-      case InkMode.auto:
-        return 'AUTO';
-      case InkMode.diabp:
-        return 'DiABP';
-      case InkMode.dianbp:
-        return 'DiANBP';
-      case InkMode.diasf:
-        return 'DiASF';
-    }
-  }
-}
+void main() => runApp(const FluoScanApp());
 
 class FluoScanApp extends StatelessWidget {
   const FluoScanApp({super.key});
@@ -52,6 +33,34 @@ class FluoScanApp extends StatelessWidget {
   }
 }
 
+class _DecodeResult {
+  final String text;
+  final String method;
+  final double score;
+  final List<bool>? bits;
+
+  const _DecodeResult({
+    required this.text,
+    required this.method,
+    required this.score,
+    this.bits,
+  });
+}
+
+class _ReconCandidate {
+  final double score;
+  final String label;
+  final List<bool> bits;
+
+  const _ReconCandidate(this.score, this.label, this.bits);
+}
+
+class _Run {
+  final bool bar;
+  final int width;
+  const _Run(this.bar, this.width);
+}
+
 class ScannerPage extends StatefulWidget {
   const ScannerPage({super.key});
 
@@ -59,43 +68,40 @@ class ScannerPage extends StatefulWidget {
   State<ScannerPage> createState() => _ScannerPageState();
 }
 
-class _ScanCandidate {
-  final String text;
-  final String format;
-  final String preset;
-  final double band;
-  final double thresholdOffset;
-  final String dataUrl;
-
-  const _ScanCandidate({
-    required this.text,
-    required this.format,
-    required this.preset,
-    required this.band,
-    required this.thresholdOffset,
-    required this.dataUrl,
-  });
-}
-
 class _ScannerPageState extends State<ScannerPage> {
-  static const String _cameraViewType = 'fluoscan-camera-view-v02';
+  static const String _cameraViewType = 'fluoscan-camera-screen-v04';
 
   late final html.VideoElement _video;
   final html.CanvasElement _sourceCanvas = html.CanvasElement();
   html.MediaStream? _stream;
   Timer? _autoTimer;
 
-  InkMode _mode = InkMode.auto;
   bool _cameraRunning = false;
   bool _autoScan = false;
   bool _busy = false;
-  double _sensitivity = 0.0;
 
-  String _status = 'Ready. Start the camera or test one of the supplied images.';
+  String _status = 'Ready. Start the rear camera and point it at the barcode shown on your screen.';
   String _decoded = '--';
   String _details = '';
   Uint8List? _capturedRoiPng;
   Uint8List? _processedPng;
+
+  // Code 128 symbol width patterns, values 0..106.
+  // 0..105 contain six alternating bar/space widths (11 modules total).
+  // 106 is the stop pattern with seven widths (13 modules total).
+  static const List<String> _code128Patterns = <String>[
+    '212222','222122','222221','121223','121322','131222','122213','122312','132212','221213',
+    '221312','231212','112232','122132','122231','113222','123122','123221','223211','221132',
+    '221231','213212','223112','312131','311222','321122','321221','312212','322112','322211',
+    '212123','212321','232121','111323','131123','131321','112313','132113','132311','211313',
+    '231113','231311','112133','112331','132131','113123','113321','133121','313121','211331',
+    '231131','213113','213311','213131','311123','311321','331121','312113','312311','332111',
+    '314111','221411','431111','111224','111422','121124','121421','141122','141221','112214',
+    '112412','122114','122411','142112','142211','241211','221114','413111','241112','134111',
+    '111242','121142','121241','114212','124112','124211','411212','421112','421211','212141',
+    '214121','412121','111143','111341','131141','114113','114311','411113','411311','113141',
+    '114131','311141','411131','211412','211214','211232','2331112',
+  ];
 
   @override
   void initState() {
@@ -124,16 +130,13 @@ class _ScannerPageState extends State<ScannerPage> {
 
   Future<void> _startCamera() async {
     try {
-      setState(() {
-        _status = 'Requesting camera permission…';
-      });
-
+      setState(() => _status = 'Requesting rear-camera permission…');
       final mediaDevices = html.window.navigator.mediaDevices;
       final stream = await mediaDevices!.getUserMedia({
         'video': {
           'facingMode': {'ideal': 'environment'},
-          'width': {'ideal': 1280},
-          'height': {'ideal': 720},
+          'width': {'ideal': 1920},
+          'height': {'ideal': 1080},
         },
         'audio': false,
       });
@@ -141,18 +144,15 @@ class _ScannerPageState extends State<ScannerPage> {
       _stream = stream;
       _video.srcObject = stream;
       await _video.play();
-
       if (!mounted) return;
       setState(() {
         _cameraRunning = true;
-        _status = 'Camera ready. Illuminate the print with UV and align one barcode in the guide.';
+        _status = 'Camera ready. Fill most of the guide width with one horizontal barcode displayed on the screen.';
       });
       _restartAutoTimer();
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _status = 'Camera error: $e';
-      });
+      setState(() => _status = 'Camera error: $e');
     }
   }
 
@@ -182,21 +182,16 @@ class _ScannerPageState extends State<ScannerPage> {
   void _restartAutoTimer() {
     _autoTimer?.cancel();
     if (!_autoScan || !_cameraRunning) return;
-    _autoTimer = Timer.periodic(const Duration(milliseconds: 1200), (_) {
-      if (!_busy) {
-        _scanCameraFrame(quiet: true);
-      }
+    _autoTimer = Timer.periodic(const Duration(milliseconds: 1400), (_) {
+      if (!_busy) _scanCameraFrame(quiet: true);
     });
   }
 
   Future<void> _scanCameraFrame({bool quiet = false}) async {
     if (!_cameraRunning) {
-      if (!quiet) {
-        setState(() => _status = 'Start the camera first.');
-      }
+      if (!quiet) setState(() => _status = 'Start the camera first.');
       return;
     }
-
     final w = _video.videoWidth;
     final h = _video.videoHeight;
     if (w <= 0 || h <= 0) {
@@ -207,14 +202,9 @@ class _ScannerPageState extends State<ScannerPage> {
     _sourceCanvas.width = w;
     _sourceCanvas.height = h;
     _sourceCanvas.context2D.drawImageScaled(_video, 0, 0, w, h);
-
-    // The guide is drawn over a video using object-fit: cover. Map that
-    // visible guide back into source-camera pixels so we analyse what the
-    // user actually placed inside the guide, not the entire camera frame.
     final roi = _cameraGuideRect(w, h);
     await _analyseCanvas(
       _sourceCanvas,
-      sourceName: 'live camera',
       quiet: quiet,
       roiX: roi.left,
       roiY: roi.top,
@@ -224,27 +214,22 @@ class _ScannerPageState extends State<ScannerPage> {
   }
 
   math.Rectangle<int> _cameraGuideRect(int sourceWidth, int sourceHeight) {
-    final displayWidth = _video.clientWidth > 0
-        ? _video.clientWidth.toDouble()
-        : sourceWidth.toDouble();
-    final displayHeight = _video.clientHeight > 0
-        ? _video.clientHeight.toDouble()
-        : sourceHeight.toDouble();
+    final displayWidth = _video.clientWidth > 0 ? _video.clientWidth.toDouble() : sourceWidth.toDouble();
+    final displayHeight = _video.clientHeight > 0 ? _video.clientHeight.toDouble() : sourceHeight.toDouble();
 
-    final scale = math.max(
-      displayWidth / sourceWidth,
-      displayHeight / sourceHeight,
-    );
+    final scale = math.max(displayWidth / sourceWidth, displayHeight / sourceHeight);
     final renderedWidth = sourceWidth * scale;
     final renderedHeight = sourceHeight * scale;
     final offsetX = (displayWidth - renderedWidth) / 2.0;
     final offsetY = (displayHeight - renderedHeight) / 2.0;
 
     // Must match the FractionallySizedBox in _cameraPanel.
-    final guideLeft = displayWidth * 0.05;
-    final guideTop = displayHeight * (0.50 - 0.42 / 2.0);
-    final guideWidth = displayWidth * 0.90;
-    final guideHeight = displayHeight * 0.42;
+    const guideWidthFactor = 0.92;
+    const guideHeightFactor = 0.36;
+    final guideLeft = displayWidth * ((1.0 - guideWidthFactor) / 2.0);
+    final guideTop = displayHeight * (0.50 - guideHeightFactor / 2.0);
+    final guideWidth = displayWidth * guideWidthFactor;
+    final guideHeight = displayHeight * guideHeightFactor;
 
     var x = ((guideLeft - offsetX) / scale).round();
     var y = ((guideTop - offsetY) / scale).round();
@@ -258,56 +243,8 @@ class _ScannerPageState extends State<ScannerPage> {
     return math.Rectangle<int>(x, y, w, h);
   }
 
-  Future<void> _chooseImage() async {
-    final input = html.FileUploadInputElement()..accept = 'image/*';
-    input.click();
-    await input.onChange.first;
-    if (input.files == null || input.files!.isEmpty) return;
-
-    final file = input.files!.first;
-    final reader = html.FileReader();
-    reader.readAsDataUrl(file);
-    await reader.onLoad.first;
-    final src = reader.result as String;
-    await _loadImageSource(src, sourceName: file.name);
-  }
-
-  Future<void> _loadSample(String path, InkMode suggestedMode) async {
-    setState(() {
-      _mode = suggestedMode;
-      _status = 'Loading sample…';
-    });
-    await _loadImageSource(path, sourceName: path.split('/').last);
-  }
-
-  Future<void> _loadImageSource(String src, {required String sourceName}) async {
-    try {
-      final img = html.ImageElement();
-      final completer = Completer<void>();
-      img.onLoad.first.then((_) => completer.complete());
-      img.onError.first.then((_) {
-        if (!completer.isCompleted) {
-          completer.completeError('Unable to load image');
-        }
-      });
-      img.src = src;
-      await completer.future;
-
-      final w = img.naturalWidth;
-      final h = img.naturalHeight;
-      _sourceCanvas.width = w;
-      _sourceCanvas.height = h;
-      _sourceCanvas.context2D.drawImageScaled(img, 0, 0, w, h);
-      await _analyseCanvas(_sourceCanvas, sourceName: sourceName);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _status = 'Image error: $e');
-    }
-  }
-
   Future<void> _analyseCanvas(
     html.CanvasElement canvas, {
-    required String sourceName,
     bool quiet = false,
     int roiX = 0,
     int roiY = 0,
@@ -316,336 +253,476 @@ class _ScannerPageState extends State<ScannerPage> {
   }) async {
     if (_busy) return;
     _busy = true;
-    if (mounted) {
+    if (mounted && !quiet) {
       setState(() {
-        if (!quiet) {
-          _status = 'Scanning $sourceName…';
-          _decoded = '--';
-          _details = '';
-        }
+        _status = 'Scanning screen image…';
+        _decoded = '--';
+        _details = '';
       });
     }
 
     try {
       final fullWidth = canvas.width ?? 0;
       final fullHeight = canvas.height ?? 0;
-      if (fullWidth < 100 || fullHeight < 40) {
-        throw 'Image is too small for reliable barcode analysis.';
-      }
+      if (fullWidth < 160 || fullHeight < 60) throw 'Camera frame is too small.';
 
       final x = roiX.clamp(0, fullWidth - 1).toInt();
       final y = roiY.clamp(0, fullHeight - 1).toInt();
       final width = (roiWidth ?? (fullWidth - x)).clamp(1, fullWidth - x).toInt();
       final height = (roiHeight ?? (fullHeight - y)).clamp(1, fullHeight - y).toInt();
-      if (width < 100 || height < 30) {
-        throw 'Barcode guide region is too small.';
-      }
+      if (width < 160 || height < 40) throw 'Barcode guide region is too small.';
 
       final roiData = canvas.context2D.getImageData(x, y, width, height);
       final roiCanvas = html.CanvasElement(width: width, height: height);
       roiCanvas.context2D.putImageData(roiData, 0, 0);
       final roiDataUrl = roiCanvas.toDataUrl('image/png');
       final roiRaw = roiDataUrl.split(',').last;
-      if (mounted) {
-        setState(() => _capturedRoiPng = base64Decode(roiRaw));
-      }
+      if (mounted) setState(() => _capturedRoiPng = base64Decode(roiRaw));
 
-      // First try the actual guide image directly. This makes FluoScan a
-      // useful sanity check with an ordinary black/white barcode and also
-      // catches fluorescent prints that already have enough optical contrast.
-      final direct = await _decodeWithZxing(roiDataUrl);
+      // 1) Let the browser/ZXing try the actual guide image first.
+      final direct = await _decodeWithBrowser(roiDataUrl);
       if (direct != null && direct.$1.trim().isNotEmpty) {
         if (!mounted) return;
         setState(() {
           _decoded = direct.$1;
           _details = 'Direct guide decode • ${direct.$2}';
           _processedPng = null;
-          _status = 'Decoded successfully from $sourceName.';
+          _status = 'Decoded successfully.';
         });
         return;
       }
 
+      // 2) Screen-specific 1D analysis. Instead of trusting one threshold,
+      // v0.4 tries several colour/luminance profiles, several horizontal
+      // bands and several thresholds. A custom Code 128 run-width decoder
+      // validates the checksum, which is more tolerant of screen moire than
+      // asking ZXing to infer everything from the raw fluorescent image.
       final pixels = roiData.data;
-      final modes = _mode == InkMode.auto
-          ? <InkMode>[InkMode.diabp, InkMode.dianbp, InkMode.diasf]
-          : <InkMode>[_mode];
+      const bands = <double>[0.28, 0.36, 0.43, 0.50, 0.57, 0.64, 0.72];
+      const thresholdLevels = <double>[0.34, 0.40, 0.46, 0.52, 0.58, 0.64, 0.70, 0.76];
+      const profileKinds = <String>['LUMA', 'GREEN', 'G-B', 'ORANGE', 'CYAN'];
 
-      // Multiple scan lines are tried independently inside the guide. This
-      // tolerates rough/wavy printed edges better than averaging the full bar
-      // height and also gives ZXing several independent reconstructions.
-      const bands = <double>[0.24, 0.34, 0.44, 0.50, 0.56, 0.66, 0.76];
-      final userShift = _sensitivity;
-      final thresholdOffsets = <double>[
-        userShift,
-        userShift - 0.04,
-        userShift + 0.04,
-        userShift - 0.08,
-        userShift + 0.08,
-        userShift - 0.14,
-        userShift + 0.14,
-      ];
+      _DecodeResult? bestDecoded;
+      final bestRecon = <_ReconCandidate>[];
 
-      _ScanCandidate? winner;
-      String? diagnosticDataUrl;
-      String diagnosticLabel = '';
-
-      for (final mode in modes) {
+      for (final kind in profileKinds) {
+        if (bestDecoded != null) break;
         for (final band in bands) {
-          final profile = _extractProfile(
-            pixels,
-            width,
-            height,
-            mode,
-            band,
-          );
-          final baseThreshold = _otsu(profile);
-          final sorted = List<double>.from(profile)..sort();
-          final p05 = _percentileSorted(sorted, 0.05);
-          final p95 = _percentileSorted(sorted, 0.95);
-          final spread = math.max(1.0, p95 - p05);
+          final raw = _extractScreenProfile(pixels, width, height, band, kind);
+          if (raw.length < 120) continue;
 
-          for (final offset in thresholdOffsets) {
-            final threshold = baseThreshold + offset * spread;
-            final brightBits = profile.map((v) => v > threshold).toList(growable: false);
+          final variants = <(String, List<double>)>[
+            ('raw', raw),
+            ('smooth', _smoothProfile(raw)),
+          ];
 
-            // Bright-bars is the expected fluorescent case. Dark-bars is
-            // deliberately tested too, so conventional barcodes and unusual
-            // emission/background combinations are not rejected by polarity.
-            for (var polarity = 0; polarity < 2; polarity++) {
-              var bits = polarity == 0
-                  ? List<bool>.from(brightBits)
-                  : brightBits.map((v) => !v).toList(growable: false);
-              bits = _repairShortRuns(bits);
+          for (final variant in variants) {
+            final normalized = _robustNormalize(variant.$2);
+            if (normalized == null) continue;
 
-              // Some webcams/front cameras are mirrored. Test both directions
-              // instead of relying on how a browser/driver presents the image.
-              for (var mirrored = 0; mirrored < 2; mirrored++) {
-                final candidateBits = mirrored == 0
-                    ? bits
-                    : bits.reversed.toList(growable: false);
-                final reconstructed = _reconstructBarcode(candidateBits);
-                if (reconstructed == null) continue;
+            for (final level in thresholdLevels) {
+              // Fluorescent bars on the displayed photographs are expected
+              // to be brighter than the background. Dark polarity is kept as
+              // a compact fallback for conventional-looking screen images.
+              for (var polarity = 0; polarity < 2; polarity++) {
+                var bits = normalized.map((v) => polarity == 0 ? v >= level : v < level).toList(growable: false);
+                bits = _removeSinglePixelGlitches(bits);
 
-                if (diagnosticDataUrl == null) {
-                  diagnosticDataUrl = reconstructed;
-                  diagnosticLabel =
-                      '${mode.label} • band ${(band * 100).round()}% • '
-                      '${polarity == 0 ? 'bright bars' : 'dark bars'} • '
-                      '${mirrored == 0 ? 'normal' : 'mirrored'}';
+                final label = '$kind/${variant.$1} • band ${(band * 100).round()}% • level ${level.toStringAsFixed(2)} • ${polarity == 0 ? 'bright' : 'dark'} bars';
+                final decoded = _decodeCode128Runs(bits, label);
+                final structureScore = _quickStructureScore(bits);
+                if (structureScore.isFinite) {
+                  _keepBestRecon(bestRecon, _ReconCandidate(structureScore, label, bits));
                 }
 
-                final result = await _decodeWithZxing(reconstructed);
-                if (result != null && result.$1.trim().isNotEmpty) {
-                  winner = _ScanCandidate(
-                    text: result.$1,
-                    format: result.$2,
-                    preset:
-                        '${mode.label}/${polarity == 0 ? 'bright' : 'dark'}${mirrored == 1 ? '/mirror' : ''}',
-                    band: band,
-                    thresholdOffset: offset,
-                    dataUrl: reconstructed,
-                  );
+                if (decoded != null) {
+                  bestDecoded = decoded;
                   break;
                 }
               }
-              if (winner != null) break;
+              if (bestDecoded != null) break;
             }
-            if (winner != null) break;
+            if (bestDecoded != null) break;
           }
-          if (winner != null) break;
+          if (bestDecoded != null) break;
         }
-        if (winner != null) break;
       }
 
-      if (!mounted) return;
-      if (winner != null) {
-        final raw = winner.dataUrl.split(',').last;
+      if (bestDecoded != null) {
+        final reconstructed = _reconstructBarcode(bestDecoded.bits!);
+        if (!mounted) return;
         setState(() {
-          _decoded = winner!.text;
-          _details =
-              '${winner!.format} • ${winner!.preset} • band ${(winner!.band * 100).round()}% • threshold ${winner!.thresholdOffset.toStringAsFixed(2)}';
-          _processedPng = base64Decode(raw);
-          _status = 'Decoded successfully from $sourceName.';
+          _decoded = bestDecoded!.text;
+          _details = '${bestDecoded!.method} • checksum valid • structural score ${bestDecoded!.score.toStringAsFixed(2)}';
+          _processedPng = reconstructed == null ? null : base64Decode(reconstructed.split(',').last);
+          _status = 'Decoded successfully.';
         });
-      } else if (!quiet) {
+        return;
+      }
+
+      // 3) Custom decoder did not validate a checksum. Give ZXing/native
+      // detector the best few reconstructed candidates rather than hundreds
+      // of threshold variants. This keeps scanning responsive on a phone.
+      for (final candidate in bestRecon.take(5)) {
+        final reconstructed = _reconstructBarcode(candidate.bits);
+        if (reconstructed == null) continue;
+        final zxing = await _decodeWithBrowser(reconstructed);
+        if (zxing != null && zxing.$1.trim().isNotEmpty) {
+          if (!mounted) return;
+          setState(() {
+            _decoded = zxing.$1;
+            _details = '${zxing.$2} after screen reconstruction • ${candidate.label}';
+            _processedPng = base64Decode(reconstructed.split(',').last);
+            _status = 'Decoded successfully.';
+          });
+          return;
+        }
+      }
+
+      if (!quiet && mounted) {
         Uint8List? diagnostic;
-        if (diagnosticDataUrl != null) {
-          diagnostic = base64Decode(diagnosticDataUrl.split(',').last);
+        String detail = 'No barcode-like reconstruction was found.';
+        if (bestRecon.isNotEmpty) {
+          final reconstructed = _reconstructBarcode(bestRecon.first.bits);
+          if (reconstructed != null) diagnostic = base64Decode(reconstructed.split(',').last);
+          detail = 'Best reconstruction: ${bestRecon.first.label} • structural score ${bestRecon.first.score.toStringAsFixed(2)}';
         }
         setState(() {
           _decoded = '--';
-          _details = diagnosticLabel.isEmpty
-              ? 'No reconstruction was produced.'
-              : 'Last diagnostic: $diagnosticLabel';
+          _details = detail;
           _processedPng = diagnostic;
-          _status =
-              'Scan completed, but no valid barcode was decoded. Check the captured guide region and reconstructed barcode below.';
+          _status = 'No checksum-valid Code 128 result. Use the captured region and best reconstruction below for tuning.';
         });
       }
     } catch (e) {
-      if (!quiet && mounted) {
-        setState(() => _status = 'Processing error: $e');
-      }
+      if (!quiet && mounted) setState(() => _status = 'Processing error: $e');
     } finally {
       _busy = false;
       if (mounted) setState(() {});
     }
   }
 
-  List<double> _extractProfile(
+  List<double> _extractScreenProfile(
     Uint8ClampedList pixels,
     int width,
     int height,
-    InkMode mode,
     double bandFraction,
+    String kind,
   ) {
-    final x0 = (width * 0.03).round();
-    final x1 = (width * 0.97).round();
+    // Keep the full quiet zone while dropping only a tiny outer margin.
+    final x0 = (width * 0.01).round();
+    final x1 = (width * 0.99).round();
     final centreY = (height * bandFraction).round();
-    final halfThickness = math.max(1, height ~/ 180);
+    final halfThickness = math.max(2, height ~/ 40);
     final y0 = math.max(0, centreY - halfThickness);
     final y1 = math.min(height - 1, centreY + halfThickness);
 
     final profile = List<double>.filled(x1 - x0, 0.0);
     for (var x = x0; x < x1; x++) {
-      var sum = 0.0;
-      var n = 0;
+      final samples = <double>[];
       for (var y = y0; y <= y1; y++) {
         final i = (y * width + x) * 4;
         final r = pixels[i].toDouble();
         final g = pixels[i + 1].toDouble();
         final b = pixels[i + 2].toDouble();
-        sum += _fluorescenceScore(r, g, b, mode);
-        n++;
+        switch (kind) {
+          case 'GREEN':
+            samples.add(g);
+            break;
+          case 'G-B':
+            samples.add(g + 0.10 * r - 0.72 * b);
+            break;
+          case 'ORANGE':
+            samples.add(r + 0.45 * g - 0.65 * b);
+            break;
+          case 'CYAN':
+            samples.add(g + 0.20 * b - 0.25 * r);
+            break;
+          case 'LUMA':
+          default:
+            samples.add(0.2126 * r + 0.7152 * g + 0.0722 * b);
+        }
       }
-      profile[x - x0] = sum / math.max(1, n);
-    }
-
-    // Light 1D smoothing only; stronger smoothing would distort narrow modules.
-    if (profile.length >= 3) {
-      final smooth = List<double>.from(profile);
-      for (var i = 1; i < profile.length - 1; i++) {
-        smooth[i] = (profile[i - 1] + profile[i] + profile[i + 1]) / 3.0;
-      }
-      return smooth;
+      // Median across a vertical strip rejects monitor sub-pixel texture,
+      // scan-line banding and isolated bright/dark screen pixels better than
+      // a single horizontal line.
+      samples.sort();
+      profile[x - x0] = samples[samples.length ~/ 2];
     }
     return profile;
   }
 
-  double _fluorescenceScore(double r, double g, double b, InkMode mode) {
-    switch (mode) {
-      case InkMode.diabp:
-        // Green/yellow emission against blue UV background.
-        return g + 0.15 * r - 0.75 * b;
-      case InkMode.dianbp:
-        // Orange emission: red + green contribution while penalising UV-blue.
-        return r + 0.45 * g - 0.65 * b;
-      case InkMode.diasf:
-        // Cyan emission is separated from blue excitation mainly by green content.
-        return g - 0.25 * r + 0.10 * b;
-      case InkMode.auto:
-        return g;
+  List<double> _smoothProfile(List<double> input) {
+    if (input.length < 5) return List<double>.from(input);
+    final out = List<double>.from(input);
+    // Small symmetric filter: enough to suppress screen pixel structure,
+    // deliberately weak enough to preserve narrow Code 128 modules.
+    for (var i = 2; i < input.length - 2; i++) {
+      out[i] = (input[i - 2] + 2 * input[i - 1] + 3 * input[i] + 2 * input[i + 1] + input[i + 2]) / 9.0;
     }
+    return out;
   }
 
-  double _otsu(List<double> values) {
-    final sorted = List<double>.from(values)..sort();
-    final low = _percentileSorted(sorted, 0.01);
-    final high = _percentileSorted(sorted, 0.99);
-    if (high <= low) return (high + low) / 2.0;
-
-    final hist = List<int>.filled(256, 0);
-    for (final v in values) {
-      final scaled = (((v - low) / (high - low)) * 255.0).clamp(0.0, 255.0).round();
-      hist[scaled]++;
-    }
-
-    final total = values.length;
-    var sumTotal = 0.0;
-    for (var i = 0; i < 256; i++) {
-      sumTotal += i * hist[i];
-    }
-
-    var weightB = 0;
-    var sumB = 0.0;
-    var maxVariance = -1.0;
-    var best = 127;
-
-    for (var t = 0; t < 256; t++) {
-      weightB += hist[t];
-      if (weightB == 0) continue;
-      final weightF = total - weightB;
-      if (weightF == 0) break;
-
-      sumB += t * hist[t];
-      final meanB = sumB / weightB;
-      final meanF = (sumTotal - sumB) / weightF;
-      final variance = weightB * weightF * math.pow(meanB - meanF, 2).toDouble();
-      if (variance > maxVariance) {
-        maxVariance = variance;
-        best = t;
-      }
-    }
-
-    return low + (high - low) * best / 255.0;
+  List<double>? _robustNormalize(List<double> profile) {
+    final sorted = List<double>.from(profile)..sort();
+    final low = _percentileSorted(sorted, 0.02);
+    final high = _percentileSorted(sorted, 0.98);
+    final span = high - low;
+    if (span.abs() < 2.0) return null;
+    return profile.map((v) => ((v - low) / span).clamp(0.0, 1.0)).toList(growable: false);
   }
 
   double _percentileSorted(List<double> sorted, double fraction) {
     if (sorted.isEmpty) return 0.0;
-    final index = ((sorted.length - 1) * fraction)
-        .round()
-        .clamp(0, sorted.length - 1)
-        .toInt();
+    final index = ((sorted.length - 1) * fraction).round().clamp(0, sorted.length - 1).toInt();
     return sorted[index];
   }
 
-  List<bool> _repairShortRuns(List<bool> input) {
-    if (input.length < 10) return input;
-    final bits = List<bool>.from(input);
-    final minRun = math.max(1, bits.length ~/ 520);
-
-    var start = 0;
-    while (start < bits.length) {
-      var end = start + 1;
-      while (end < bits.length && bits[end] == bits[start]) {
-        end++;
+  List<bool> _removeSinglePixelGlitches(List<bool> input) {
+    if (input.length < 3) return input;
+    final out = List<bool>.from(input);
+    for (var i = 1; i < input.length - 1; i++) {
+      if (input[i - 1] == input[i + 1] && input[i] != input[i - 1]) {
+        out[i] = input[i - 1];
       }
-      final length = end - start;
-      if (length <= minRun && start > 0 && end < bits.length) {
-        final left = bits[start - 1];
-        final right = bits[end];
-        if (left == right) {
-          for (var i = start; i < end; i++) {
-            bits[i] = left;
+    }
+    return out;
+  }
+
+  List<_Run> _runsFromBits(List<bool> bits) {
+    var first = bits.indexWhere((v) => v);
+    if (first < 0) return const <_Run>[];
+    var last = bits.length - 1;
+    while (last >= first && !bits[last]) last--;
+    if (last <= first) return const <_Run>[];
+
+    final runs = <_Run>[];
+    var current = bits[first];
+    var width = 1;
+    for (var i = first + 1; i <= last; i++) {
+      if (bits[i] == current) {
+        width++;
+      } else {
+        runs.add(_Run(current, width));
+        current = bits[i];
+        width = 1;
+      }
+    }
+    runs.add(_Run(current, width));
+    return runs;
+  }
+
+  _DecodeResult? _decodeCode128Runs(List<bool> bits, String methodLabel) {
+    final allRuns = _runsFromBits(bits);
+    if (allRuns.length < 25) return null;
+
+    _DecodeResult? best;
+    // Trimming by pairs preserves the expected bar/space alternation and
+    // handles small bright objects or cursor fragments at the ROI edges.
+    for (final startCut in <int>[0, 2, 4, 6, 8]) {
+      for (final endCut in <int>[0, 2, 4, 6, 8]) {
+        final end = allRuns.length - endCut;
+        if (startCut >= end) continue;
+        final runs = allRuns.sublist(startCut, end);
+        if (runs.length < 25 || runs.length % 6 != 1) continue;
+        if (!runs.first.bar || !runs.last.bar) continue;
+
+        final symbolCount = (runs.length - 7) ~/ 6;
+        if (symbolCount < 3) continue; // start + checksum + at least one data symbol
+
+        final values = <int>[];
+        var totalScore = 0.0;
+        var valid = true;
+
+        // Start symbol: only 103,104,105 are legal.
+        final startMatch = _bestPattern(runs.sublist(0, 6), const [103, 104, 105]);
+        if (startMatch == null || startMatch.$2 > 0.82) continue;
+        values.add(startMatch.$1);
+        totalScore += startMatch.$2;
+
+        for (var s = 1; s < symbolCount; s++) {
+          final group = runs.sublist(s * 6, s * 6 + 6);
+          final match = _bestPattern(group, List<int>.generate(103, (i) => i));
+          if (match == null || match.$2 > 0.95) {
+            valid = false;
+            break;
           }
+          values.add(match.$1);
+          totalScore += match.$2;
+        }
+        if (!valid || values.length < 3) continue;
+
+        final stopRuns = runs.sublist(symbolCount * 6);
+        final stopScore = _patternCost(stopRuns, _patternWidths(106));
+        if (!stopScore.isFinite || stopScore > 0.95) continue;
+        totalScore += stopScore;
+
+        final checksumValue = values.last;
+        var checksum = values.first;
+        for (var i = 1; i < values.length - 1; i++) {
+          checksum += values[i] * i;
+        }
+        if (checksum % 103 != checksumValue) continue;
+
+        final text = _decodeCode128Values(values);
+        if (text == null || text.isEmpty) continue;
+
+        final avgScore = totalScore / (values.length + 1);
+        final candidate = _DecodeResult(
+          text: text,
+          method: 'Code 128 screen-profile • $methodLabel',
+          score: avgScore,
+          bits: bits,
+        );
+        if (best == null || candidate.score < best.score) best = candidate;
+      }
+    }
+    return best;
+  }
+
+  (int, double)? _bestPattern(List<_Run> runs, List<int> allowed) {
+    if (runs.length != 6) return null;
+    int? bestValue;
+    var bestScore = double.infinity;
+    for (final value in allowed) {
+      final score = _patternCost(runs, _patternWidths(value));
+      if (score < bestScore) {
+        bestScore = score;
+        bestValue = value;
+      }
+    }
+    return bestValue == null ? null : (bestValue, bestScore);
+  }
+
+  List<int> _patternWidths(int value) {
+    return _code128Patterns[value].split('').map(int.parse).toList(growable: false);
+  }
+
+  double _patternCost(List<_Run> runs, List<int> pattern) {
+    if (runs.length != pattern.length || runs.isEmpty) return double.infinity;
+    final actualSum = runs.fold<int>(0, (sum, r) => sum + r.width);
+    final moduleSum = pattern.fold<int>(0, (sum, v) => sum + v);
+    if (actualSum <= 0 || moduleSum <= 0) return double.infinity;
+    final scale = actualSum / moduleSum;
+    if (scale <= 0.1) return double.infinity;
+
+    var cost = 0.0;
+    for (var i = 0; i < runs.length; i++) {
+      final modules = runs[i].width / scale;
+      cost += (modules - pattern[i]).abs();
+    }
+    return cost / runs.length;
+  }
+
+  String? _decodeCode128Values(List<int> values) {
+    if (values.length < 3) return null;
+    var set = switch (values.first) {
+      103 => 'A',
+      104 => 'B',
+      105 => 'C',
+      _ => '',
+    };
+    if (set.isEmpty) return null;
+
+    final out = StringBuffer();
+    var shift = false;
+    // Exclude start and checksum values.
+    for (var i = 1; i < values.length - 1; i++) {
+      final v = values[i];
+
+      // Code-set switches are controls only when they are controls in the
+      // current set. In Code C, values 00..99 are numeric data.
+      if (set != 'C' && v == 99) {
+        set = 'C';
+        shift = false;
+        continue;
+      }
+      if (set != 'B' && v == 100) {
+        set = 'B';
+        shift = false;
+        continue;
+      }
+      if (set != 'A' && v == 101) {
+        set = 'A';
+        shift = false;
+        continue;
+      }
+      if (set != 'C' && v == 98) {
+        shift = true;
+        continue;
+      }
+
+      var activeSet = set;
+      if (shift) {
+        activeSet = set == 'A' ? 'B' : 'A';
+        shift = false;
+      }
+
+      if (activeSet == 'C') {
+        if (v > 99) {
+          // FNC1 (102) can occur in Code C; these experimental labels do not
+          // use it, so ignore it without adding invented text.
+          if (v == 102) continue;
+          return null;
+        }
+        out.write(v.toString().padLeft(2, '0'));
+      } else if (activeSet == 'B') {
+        if (v > 95) {
+          // FNC/control symbols are not expected in the current labels.
+          continue;
+        }
+        out.writeCharCode(v + 32);
+      } else if (activeSet == 'A') {
+        if (v <= 63) {
+          out.writeCharCode(v + 32);
+        } else if (v <= 95) {
+          out.writeCharCode(v - 64);
+        } else {
+          return null;
         }
       }
-      start = end;
     }
-    return bits;
+    return out.toString();
+  }
+
+  double _quickStructureScore(List<bool> bits) {
+    final allRuns = _runsFromBits(bits);
+    if (allRuns.length < 25) return double.infinity;
+    var best = double.infinity;
+    for (final startCut in <int>[0, 2, 4, 6, 8]) {
+      for (final endCut in <int>[0, 2, 4, 6, 8]) {
+        final end = allRuns.length - endCut;
+        if (startCut >= end) continue;
+        final runs = allRuns.sublist(startCut, end);
+        if (runs.length < 25 || runs.length % 6 != 1) continue;
+        final symbolCount = (runs.length - 7) ~/ 6;
+        if (symbolCount < 3) continue;
+        final start = _bestPattern(runs.sublist(0, 6), const [103, 104, 105]);
+        if (start == null) continue;
+        final stop = _patternCost(runs.sublist(symbolCount * 6), _patternWidths(106));
+        final score = start.$2 + stop;
+        if (score < best) best = score;
+      }
+    }
+    return best;
+  }
+
+  void _keepBestRecon(List<_ReconCandidate> list, _ReconCandidate candidate) {
+    list.add(candidate);
+    list.sort((a, b) => a.score.compareTo(b.score));
+    if (list.length > 8) list.removeRange(8, list.length);
   }
 
   String? _reconstructBarcode(List<bool> bits) {
-    var first = -1;
-    var last = -1;
-    for (var i = 0; i < bits.length; i++) {
-      if (bits[i]) {
-        first = i;
-        break;
-      }
-    }
-    for (var i = bits.length - 1; i >= 0; i--) {
-      if (bits[i]) {
-        last = i;
-        break;
-      }
-    }
-    if (first < 0 || last <= first) return null;
+    var first = bits.indexWhere((v) => v);
+    if (first < 0) return null;
+    var last = bits.length - 1;
+    while (last >= first && !bits[last]) last--;
+    if (last <= first) return null;
 
     final barcodeWidth = last - first + 1;
     if (barcodeWidth < 80) return null;
-
-    final quiet = math.max(24, barcodeWidth ~/ 10);
+    final quiet = math.max(28, barcodeWidth ~/ 8);
     const scale = 3;
     const outHeight = 180;
     final outWidth = (barcodeWidth + 2 * quiet) * scale;
@@ -666,16 +743,13 @@ class _ScannerPageState extends State<ScannerPage> {
     return out.toDataUrl('image/png');
   }
 
-  Future<(String, String)?> _decodeWithZxing(String dataUrl) async {
+  Future<(String, String)?> _decodeWithBrowser(String dataUrl) async {
     try {
       final promise = js.context.callMethod('decodeCode128DataUrl', [dataUrl]);
       final dynamic raw = await js_util.promiseToFuture<dynamic>(promise);
       if (raw == null) return null;
       final map = jsonDecode(raw.toString()) as Map<String, dynamic>;
-      return (
-        (map['text'] ?? '').toString(),
-        (map['format'] ?? 'Code 128').toString(),
-      );
+      return ((map['text'] ?? '').toString(), (map['format'] ?? 'Code 128').toString());
     } catch (_) {
       return null;
     }
@@ -683,14 +757,9 @@ class _ScannerPageState extends State<ScannerPage> {
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
-    final compact = width < 760;
-
+    final compact = MediaQuery.of(context).size.width < 760;
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('FluoScan'),
-        centerTitle: false,
-      ),
+      appBar: AppBar(title: const Text('FluoScan')),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
@@ -701,49 +770,37 @@ class _ScannerPageState extends State<ScannerPage> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'Fluorescent barcode reader',
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
+                    'Screen barcode reader',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 6),
                   const Text(
-                    'The camera first tries the barcode inside the guide directly. If that fails, FluoScan isolates the luminogen emission, reconstructs a black/white barcode, and retries decoding.',
+                    'Optimised for fluorescent barcode photographs displayed on a laptop/monitor and scanned with the phone rear camera. No image upload is used.',
                   ),
-                  const SizedBox(height: 16),
-                  _modeSelector(),
                   const SizedBox(height: 14),
                   _cameraPanel(compact),
                   const SizedBox(height: 14),
                   _controls(compact),
                   const SizedBox(height: 10),
                   _scanStatusCard(),
-                  const SizedBox(height: 12),
-                  _sensitivityControl(),
                   const SizedBox(height: 14),
                   _resultCard(),
-                  const SizedBox(height: 14),
-                  _sampleCard(),
+                  const SizedBox(height: 12),
+                  const Card(
+                    child: Padding(
+                      padding: EdgeInsets.all(14),
+                      child: Text(
+                        'For the cleanest screen test: keep the barcode horizontal, remove the mouse cursor from the barcode, fill roughly 70–90% of the guide width, and hold the phone as square to the monitor as practical.',
+                        style: TextStyle(fontSize: 12.5),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
           ),
         ),
       ),
-    );
-  }
-
-  Widget _modeSelector() {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: InkMode.values.map((mode) {
-        return ChoiceChip(
-          label: Text(mode.label),
-          selected: _mode == mode,
-          onSelected: (_) => setState(() => _mode = mode),
-        );
-      }).toList(),
     );
   }
 
@@ -765,15 +822,15 @@ class _ScannerPageState extends State<ScannerPage> {
                   children: [
                     Icon(Icons.camera_alt_outlined, color: Colors.white70, size: 42),
                     SizedBox(height: 8),
-                    Text('Camera preview', style: TextStyle(color: Colors.white70)),
+                    Text('Rear-camera preview', style: TextStyle(color: Colors.white70)),
                   ],
                 ),
               ),
             Align(
               alignment: Alignment.center,
               child: FractionallySizedBox(
-                widthFactor: 0.90,
-                heightFactor: 0.42,
+                widthFactor: 0.92,
+                heightFactor: 0.36,
                 child: IgnorePointer(
                   child: Container(
                     decoration: BoxDecoration(
@@ -788,7 +845,7 @@ class _ScannerPageState extends State<ScannerPage> {
               left: 18,
               bottom: 12,
               child: Text(
-                'Keep ONE barcode horizontal inside the guide',
+                'One horizontal barcode • include blank space at both ends',
                 style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
               ),
             ),
@@ -799,7 +856,7 @@ class _ScannerPageState extends State<ScannerPage> {
   }
 
   Widget _controls(bool compact) {
-    final buttons = <Widget>[
+    final controls = <Widget>[
       FilledButton.icon(
         onPressed: _cameraRunning ? _stopCamera : _startCamera,
         icon: Icon(_cameraRunning ? Icons.stop_circle_outlined : Icons.videocam_outlined),
@@ -809,11 +866,6 @@ class _ScannerPageState extends State<ScannerPage> {
         onPressed: _cameraRunning && !_busy ? () => _scanCameraFrame() : null,
         icon: const Icon(Icons.document_scanner_outlined),
         label: const Text('Scan frame'),
-      ),
-      OutlinedButton.icon(
-        onPressed: _busy ? null : _chooseImage,
-        icon: const Icon(Icons.image_outlined),
-        label: const Text('Choose image'),
       ),
       Row(
         mainAxisSize: MainAxisSize.min,
@@ -832,14 +884,8 @@ class _ScannerPageState extends State<ScannerPage> {
       ),
     ];
 
-    if (compact) {
-      return Wrap(spacing: 8, runSpacing: 8, children: buttons);
-    }
-    return Row(
-      children: [
-        ...buttons.expand((w) => [w, const SizedBox(width: 8)]),
-      ],
-    );
+    if (compact) return Wrap(spacing: 8, runSpacing: 8, children: controls);
+    return Row(children: controls.expand((w) => [w, const SizedBox(width: 8)]).toList());
   }
 
   Widget _scanStatusCard() {
@@ -852,11 +898,7 @@ class _ScannerPageState extends State<ScannerPage> {
             Row(
               children: [
                 if (_busy) ...[
-                  const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
+                  const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
                   const SizedBox(width: 10),
                 ],
                 Expanded(child: Text(_status)),
@@ -872,31 +914,6 @@ class _ScannerPageState extends State<ScannerPage> {
     );
   }
 
-  Widget _sensitivityControl() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Threshold sensitivity: ${_sensitivity.toStringAsFixed(2)}'),
-            Slider(
-              value: _sensitivity,
-              min: -0.25,
-              max: 0.25,
-              divisions: 20,
-              onChanged: (v) => setState(() => _sensitivity = v),
-            ),
-            const Text(
-              'Leave at 0.00 initially. Move negative if weak bars disappear; move positive if fluorescent background/speckle is being interpreted as bars.',
-              style: TextStyle(fontSize: 12),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _resultCard() {
     return Card(
       child: Padding(
@@ -906,10 +923,7 @@ class _ScannerPageState extends State<ScannerPage> {
           children: [
             const Text('Decoded result', style: TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
-            SelectableText(
-              _decoded,
-              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
-            ),
+            SelectableText(_decoded, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700)),
             if (_details.isNotEmpty) ...[
               const SizedBox(height: 5),
               Text(_details, style: const TextStyle(color: Colors.black54)),
@@ -926,7 +940,7 @@ class _ScannerPageState extends State<ScannerPage> {
             ],
             if (_processedPng != null) ...[
               const SizedBox(height: 14),
-              const Text('Reconstructed barcode sent to decoder'),
+              const Text('Best reconstructed barcode'),
               const SizedBox(height: 6),
               Container(
                 color: Colors.white,
@@ -934,41 +948,6 @@ class _ScannerPageState extends State<ScannerPage> {
                 child: Image.memory(_processedPng!, fit: BoxFit.contain),
               ),
             ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _sampleCard() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Built-in test images', style: TextStyle(fontWeight: FontWeight.w700)),
-            const SizedBox(height: 6),
-            const Text('Use these before testing the physical print. They are cropped from the barcode image supplied in this project.'),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton(
-                  onPressed: _busy ? null : () => _loadSample('samples/DiABP.png', InkMode.diabp),
-                  child: const Text('Test DiABP'),
-                ),
-                OutlinedButton(
-                  onPressed: _busy ? null : () => _loadSample('samples/DiANBP.png', InkMode.dianbp),
-                  child: const Text('Test DiANBP'),
-                ),
-                OutlinedButton(
-                  onPressed: _busy ? null : () => _loadSample('samples/DiASF.png', InkMode.diasf),
-                  child: const Text('Test DiASF'),
-                ),
-              ],
-            ),
           ],
         ),
       ),
